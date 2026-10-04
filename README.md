@@ -24,6 +24,8 @@ Local GUI (FastAPI + plain HTML/JS) for training Qwen-Image 2.1 LoRAs with
    (a hard link avoids duplication) or set "Models folder" in the GUI.
 3. In the GUI: Dataset -> Captions -> Configuration -> Run.
 
+<img width="776" height="592" alt="image" src="https://github.com/user-attachments/assets/0d461b22-f58c-4401-bb1a-7ff74f97c980" />
+
 ## Notes
 - Training runs `python backend\ai-toolkit\run.py <name>_job.yaml`; the generated YAML is kept in the
   output folder. Output: `<Output>\<name>\<name>.safetensors` plus step checkpoints.
