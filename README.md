@@ -34,6 +34,12 @@ Local GUI (FastAPI + plain HTML/JS) for training Qwen-Image 2.1 LoRAs with
 - The app refuses to start if less than ~6 GB of VRAM is free (close ComfyUI etc. first).
 - Only one job (training or captioning) runs at a time. Stop uses `taskkill /T` (forced after 8 s).
 - Logs: `logs\train_*.log`.
+- Settings are saved automatically to `settings.json` (not committed), so they survive port/browser changes.
+- Run tab: **Loss curve** (per-step loss/lr), **LoRA weight norm** per checkpoint (how far the LoRA has moved
+  the base model; a steady linear rise means it is still drifting), and **sample grids by step**.
+- Samples use a fixed seed and an optional width/height (e.g. 576x1024 for portrait). "Strengths" (e.g. `0, 0.5, 1`)
+  renders every prompt once per LoRA strength (`--m`); strength 0 is the base model, so base, LoRA and
+  checkpoints can be compared fairly.
 
 ## Verification status
 Verified: 20-step smoke test (512 px, rank 16, convrot8 + full layer offload, "low" mode),
