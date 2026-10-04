@@ -1,0 +1,4 @@
+transformers>=5.5.0
+accelerate
+Pillow
+huggingface_hub

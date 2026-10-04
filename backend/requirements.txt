@@ -1,0 +1,6 @@
+# App server dependencies (ai-toolkit's own requirements are installed separately)
+fastapi
+uvicorn
+pyyaml
+pydantic
+websockets

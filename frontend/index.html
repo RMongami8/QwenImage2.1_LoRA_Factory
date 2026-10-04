@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen-Image 2.1 LoRA Factory</title>
+    <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<aside class="sidebar">
+    <div>
+        <h1>Qwen-Image 2.1<br>LoRA Factory</h1>
+        <p class="small">ai-toolkit powered</p>
+    </div>
+    <nav>
+        <div class="nav-item active" data-tab="dataset"><span class="step-chip">Step 1</span>
+            <div class="nav-label"><span>📁</span><span>データセット<br><small>Dataset</small></span></div></div>
+        <div class="nav-item" data-tab="caption"><span class="step-chip">Step 2</span>
+            <div class="nav-label"><span>📝</span><span>キャプション<br><small>Captions</small></span></div></div>
+        <div class="nav-item" data-tab="config"><span class="step-chip">Step 3</span>
+            <div class="nav-label"><span>⚙️</span><span>学習設定<br><small>Configuration</small></span></div></div>
+        <div class="nav-item" data-tab="train"><span class="step-chip">Step 4</span>
+            <div class="nav-label"><span>🚀</span><span>実行<br><small>Run</small></span></div></div>
+    </nav>
+    <div class="env" id="env-box">環境を確認中... / Checking...</div>
+</aside>
+
+<main class="main-content">
+<!-- Dataset -->
+<section id="tab-dataset" class="tab-content">
+    <h2>データセット / Dataset</h2>
+    <div class="card">
+        <div class="hint-box">
+            画像と同名の <code>.txt</code> に自然文キャプションを置きます（例: <code>img01.png</code> + <code>img01.txt</code>）。解像度は混在可（バケット処理）。<br>
+            <span class="lang-en">Put a same-named .txt natural-language caption beside each image. Mixed sizes are fine.</span>
+        </div>
+        <div class="form-group">
+            <label>画像フォルダ / Dataset folder</label>
+            <div class="row"><input type="text" id="dataset-path" placeholder="C:\path\to\images">
+                <button class="btn btn-secondary" onclick="browseInto('dataset-path','folder')">参照</button></div>
+        </div>
+        <button class="btn btn-primary" onclick="loadDataset(true)">読み込み / Load</button>
+        <span class="small" id="dataset-summary" style="margin-left:1rem"></span>
+    </div>
+</section>
+
+<!-- Captions -->
+<section id="tab-caption" class="tab-content" style="display:none">
+    <h2>キャプション / Captions</h2>
+    <div class="card">
+        <h3 style="margin-bottom:.8rem;font-size:.9rem">🤖 Gemma 自動キャプション / Auto-captioning</h3>
+        <div class="hint-box">
+            Gemma-4 は事前にローカルへ保存してください: <code>hf download google/gemma-4-E4B-it --local-dir "C:\models\gemma-4-E4B-it"</code><br>
+            <span class="lang-en">Download Gemma once (license acceptance + hf login required). The app only reads the local folder.</span>
+        </div>
+        <div class="form-group">
+            <label>Gemma モデルフォルダ / Gemma folder</label>
+            <div class="row"><input type="text" id="gemma-path" placeholder="C:\models\gemma-4-E4B-it">
+                <button class="btn btn-secondary" onclick="browseInto('gemma-path','folder')">参照</button></div>
+        </div>
+        <div class="grid2">
+            <div class="form-group"><label>トリガーワード(任意) / Trigger word</label>
+                <input type="text" id="trigger-word" placeholder="例: my_character"></div>
+            <div class="form-group"><label>既存キャプション / Existing captions</label>
+                <select id="cap-overwrite"><option value="0">スキップ / Skip</option><option value="1">上書き / Overwrite</option></select></div>
+        </div>
+        <button id="cap-btn" class="btn btn-primary" onclick="runCaptioner()">🚀 生成 / Run</button>
+    </div>
+    <div id="cap-progress" class="card" style="display:none">
+        <div class="row" style="justify-content:space-between;margin-bottom:.5rem"><span id="cap-ptext"></span><span id="cap-pct"></span></div>
+        <div class="bar"><div id="cap-bar"></div></div>
+    </div>
+    <div class="row" style="margin-bottom:1rem"><button class="btn btn-secondary" onclick="loadDataset(false)">🔄 再読み込み / Refresh</button>
+        <span class="small">編集は自動保存されます / edits autosave</span></div>
+    <div id="caption-grid" class="caption-editor-grid"></div>
+</section>
+
+<!-- Config -->
+<section id="tab-config" class="tab-content" style="display:none">
+    <h2>学習設定 / Configuration</h2>
+    <div class="card">
+        <div class="grid2">
+            <div class="form-group"><label>LoRA 名 / Name (英数字 _ - .)</label>
+                <input type="text" id="name" value="my_lora"></div>
+            <div class="form-group"><label>出力フォルダ / Output folder</label>
+                <div class="row"><input type="text" id="output-dir" placeholder="D:\00_Claude\qwen_image2.1\Output">
+                    <button class="btn btn-secondary" onclick="browseInto('output-dir','folder')">参照</button></div></div>
+            <div class="form-group"><label>モデルフォルダ / Models folder</label>
+                <div class="row"><input type="text" id="models-dir" placeholder="(既定: model\)">
+                    <button class="btn btn-secondary" onclick="browseInto('models-dir','folder')">参照</button></div>
+                <p class="small">diffusion_models / text_encoders / vae を含むフォルダ(ComfyUI の models も可)</p></div>
+            <div class="form-group"><label>ComfyUI loras フォルダ(任意) / ComfyUI loras folder</label>
+                <div class="row"><input type="text" id="comfy-dir" placeholder="D:\00_Claude\ComfyUI\data\models\loras">
+                    <button class="btn btn-secondary" onclick="browseInto('comfy-dir','folder')">参照</button></div></div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="grid3">
+            <div class="form-group"><label>VRAM モード / VRAM mode</label>
+                <select id="vram"><option value="low">low (最小VRAM・検証済み)</option>
+                    <option value="balanced">balanced (未調整)</option><option value="high">high (未調整)</option></select></div>
+            <div class="form-group"><label>総ステップ数 / Steps</label><input type="number" id="steps" value="2000" min="1"></div>
+            <div class="form-group"><label>保存間隔 / Save every</label><input type="number" id="save-every" value="250" min="1"></div>
+            <div class="form-group"><label>Rank</label><input type="number" id="rank" value="16" min="1"></div>
+            <div class="form-group"><label>Alpha</label><input type="number" id="alpha" value="16" min="1"></div>
+            <div class="form-group"><label>Learning rate</label><input type="text" id="lr" value="1e-4"></div>
+            <div class="form-group"><label>Optimizer</label>
+                <select id="optimizer"><option value="adamw8bit">AdamW8bit</option><option value="adamw">AdamW</option>
+                    <option value="prodigy">Prodigy (lr=1.0)</option></select></div>
+            <div class="form-group"><label>Batch size</label><input type="number" id="batch" value="1" min="1"></div>
+            <div class="form-group"><label>Repeats</label><input type="number" id="repeats" value="1" min="1"></div>
+            <div class="form-group"><label>キャプションドロップ率 / Caption dropout</label><input type="number" id="dropout" value="0.05" step="0.01" min="0" max="1"></div>
+            <div class="form-group"><label>保持チェックポイント数 / Keep</label><input type="number" id="keep" value="4" min="1"></div>
+        </div>
+        <div class="form-group checks"><label style="margin-bottom:.5rem">解像度 / Resolutions</label>
+            <label><input type="checkbox" class="res" value="512"> 512</label>
+            <label><input type="checkbox" class="res" value="768"> 768</label>
+            <label><input type="checkbox" class="res" value="1024" checked> 1024</label>
+        </div>
+        <p class="small" id="epoch-hint"></p>
+        <div class="form-group"><label>Optimizer args(任意) / extra args (k=v ...)</label><input type="text" id="opt-args" placeholder="decouple=True weight_decay=0.01"></div>
+    </div>
+    <div class="card">
+        <div class="form-group checks">
+            <label><input type="checkbox" id="sample-on"> 学習中にサンプル画像を生成 / Generate samples (未検証・VRAM増)</label>
+        </div>
+        <div class="grid2">
+            <div class="form-group"><label>サンプル間隔 / Sample every</label><input type="number" id="sample-every" value="250"></div>
+            <div class="form-group"><label>サイズ / Size</label><select id="sample-size"><option>512</option><option selected>768</option><option>1024</option></select></div>
+        </div>
+        <div class="form-group"><label>サンプルプロンプト(1行1件) / Prompts</label><textarea id="sample-prompts" rows="3"></textarea></div>
+        <div class="form-group checks">
+            <label><input type="checkbox" id="resume"> 既存チェックポイントから再開 / Resume if output exists</label>
+            <label><input type="checkbox" id="shutdown"> 完了後にPCをシャットダウン / Shutdown when finished</label>
+        </div>
+    </div>
+    <button class="btn btn-primary" onclick="showTab('train')">次へ / Next</button>
+</section>
+
+<!-- Run -->
+<section id="tab-train" class="tab-content" style="display:none">
+    <h2>実行 / Run</h2>
+    <div class="card">
+        <div class="row">
+            <button id="start-btn" class="btn btn-primary" onclick="startTraining()">🚀 学習開始 / Start training</button>
+            <button id="stop-btn" class="btn btn-danger" onclick="stopJob()" disabled>■ 停止 / Stop</button>
+            <span id="state-badge" class="badge ng">idle</span>
+        </div>
+        <p class="small" id="start-msg" style="color:#f87171"></p>
+        <div class="stats">
+            <span>Phase: <b id="st-phase">-</b></span><span>Step: <b id="st-step">0 / 0</b></span>
+            <span>Loss: <b id="st-loss">-</b></span><span>Speed: <b id="st-speed">-</b></span>
+            <span>Elapsed: <b id="st-elapsed">-</b></span><span>ETA: <b id="st-eta">-</b></span>
+        </div>
+        <div class="bar"><div id="train-bar"></div></div>
+    </div>
+    <div class="card"><h3 style="margin-bottom:.5rem;font-size:.9rem">ログ / Log</h3><div id="log" class="logbox"></div></div>
+    <div class="card"><div class="row" style="margin-bottom:.5rem"><h3 style="font-size:.9rem;flex:1">出力 / Outputs</h3>
+        <button class="btn btn-secondary" onclick="loadOutputs()">🔄</button></div>
+        <div id="outputs" class="small">-</div><div id="samples" class="thumbs" style="margin-top:.75rem"></div></div>
+</section>
+</main>
+<script src="app.js?v=1"></script>
+</body>
+</html>

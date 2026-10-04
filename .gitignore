@@ -1,0 +1,8 @@
+/venv/
+/venv_captioner/
+/model/
+/backend/ai-toolkit/
+/workspace/
+/logs/
+__pycache__/
+/.claude/
