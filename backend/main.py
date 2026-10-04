@@ -3,10 +3,12 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from collections import deque
 from typing import Optional
 
@@ -500,6 +502,65 @@ async def list_outputs(output_dir: str, name: str):
                 if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS:
                     samples.append({"name": f, "path": os.path.join(sdir, f)})
     return {"checkpoints": ckpts, "samples": samples[:24]}
+
+
+# ---------------------------------------------------------------- API: saved settings
+SETTINGS_FILE = os.path.join(APP_ROOT, "settings.json")
+
+
+@app.get("/api/settings")
+async def get_settings():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+@app.post("/api/settings")
+async def save_settings(data: dict):
+    if len(json.dumps(data)) > 200_000:
+        raise HTTPException(status_code=413, detail="Settings too large")
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SETTINGS_FILE)  # atomic: never leaves a half-written file
+    return {"status": "saved"}
+
+
+# ---------------------------------------------------------------- API: loss curve
+@app.get("/api/loss")
+async def api_loss(output_dir: str, name: str, since: int = -1):
+    """Per-step loss / lr from ai-toolkit's loss_log.db (steps > `since`)."""
+    db = os.path.join(output_dir, name, "loss_log.db")
+    empty = {"exists": False, "steps": [], "loss": [], "lr": [], "last_step": -1}
+    if not os.path.isfile(db):
+        return empty
+    uri = "file:" + urllib.parse.quote(db.replace("\\", "/"), safe="/:") + "?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True, timeout=5)
+    except sqlite3.Error:
+        return empty
+    try:
+        keys = [r[0] for r in con.execute("SELECT key FROM metric_keys WHERE key LIKE 'loss/%'")]
+        if not keys:
+            return {**empty, "exists": True}
+        key = "loss/loss" if "loss/loss" in keys else sorted(keys)[0]
+        rows = con.execute(
+            "SELECT m.step, m.value_real, l.value_real FROM metrics m "
+            "LEFT JOIN metrics l ON l.step = m.step AND l.key = 'learning_rate' "
+            "WHERE m.key = ? AND m.step > ? ORDER BY m.step", (key, since)).fetchall()
+        last = con.execute("SELECT MAX(step) FROM steps").fetchone()[0]
+    except sqlite3.Error:
+        return {**empty, "exists": True}
+    finally:
+        con.close()
+    return {
+        "exists": True, "key": key,
+        "steps": [r[0] for r in rows], "loss": [r[1] for r in rows], "lr": [r[2] for r in rows],
+        "last_step": last if last is not None else -1,
+    }
 
 
 # ---------------------------------------------------------------- API: captioner

@@ -154,6 +154,20 @@
         </div>
         <div class="bar"><div id="train-bar"></div></div>
     </div>
+    <div class="card">
+        <div class="row" style="margin-bottom:.5rem">
+            <h3 style="font-size:.9rem;flex:1">Loss curve</h3>
+            <label class="small" style="margin:0 .5rem 0 0">平滑化 / Smoothing</label>
+            <select id="loss-win" style="width:auto"><option value="1">なし</option><option value="10">10</option>
+                <option value="50" selected>50</option><option value="100">100</option></select>
+            <label class="small checks" style="margin:0 0 0 1rem"><input type="checkbox" id="loss-lr" checked> lr</label>
+            <button class="btn btn-secondary" style="margin-left:.75rem;padding:.4rem .8rem" onclick="reloadLoss()">🔄</button>
+        </div>
+        <div style="position:relative"><canvas id="loss-canvas" style="width:100%;height:260px"></canvas>
+            <div id="loss-tip" class="small" style="position:absolute;top:4px;left:60px;pointer-events:none"></div></div>
+        <p class="small" id="loss-info">-</p>
+        <p class="small">loss は1ステップごとの値で、タイムステップの乱数により大きくばらつきます(正常)。過学習の判断はサンプル画像を併用してください。</p>
+    </div>
     <div class="card"><h3 style="margin-bottom:.5rem;font-size:.9rem">ログ / Log</h3><div id="log" class="logbox"></div></div>
     <div class="card"><div class="row" style="margin-bottom:.5rem"><h3 style="font-size:.9rem;flex:1">出力 / Outputs</h3>
         <button class="btn btn-secondary" onclick="loadOutputs()">🔄</button></div>

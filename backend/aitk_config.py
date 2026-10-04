@@ -125,6 +125,8 @@ def build_config(c: dict) -> dict:
     }
     if trigger:
         process["trigger_word"] = trigger
+    # per-step loss/lr go to <output>/<name>/loss_log.db (read by the app's loss curve)
+    process["logging"] = {"log_every": 1, "use_ui_logger": True}
 
     return {
         "job": "extension",

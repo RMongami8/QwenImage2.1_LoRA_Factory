@@ -2,27 +2,61 @@ const $ = (id) => document.getElementById(id);
 const KEY = "qwen21_factory_";
 const PERSIST = ["dataset-path", "gemma-path", "trigger-word", "name", "output-dir", "models-dir", "comfy-dir",
     "vram", "steps", "save-every", "rank", "alpha", "lr", "optimizer", "batch", "repeats", "dropout", "keep",
-    "opt-args", "sample-every", "sample-size", "sample-prompts"];
-const PERSIST_CHECK = ["sample-on", "resume", "shutdown"];
+    "opt-args", "sample-every", "sample-size", "sample-prompts", "cap-overwrite", "loss-win"];
+const PERSIST_CHECK = ["sample-on", "resume", "shutdown", "loss-lr"];
 
-function load() {
-    PERSIST.forEach((id) => { const v = localStorage.getItem(KEY + id); if (v !== null) $(id).value = v; });
-    PERSIST_CHECK.forEach((id) => { const v = localStorage.getItem(KEY + id); if (v !== null) $(id).checked = v === "1"; });
-    const r = localStorage.getItem(KEY + "res");
-    if (r) document.querySelectorAll(".res").forEach((c) => (c.checked = r.split(",").includes(c.value)));
+/* Settings live in settings.json on the server (survives port changes / browser data wipes);
+   localStorage is only a fallback and the source for a one-time migration. */
+function collect() {
+    const values = {}, checks = {};
+    PERSIST.forEach((id) => (values[id] = $(id).value));
+    PERSIST_CHECK.forEach((id) => (checks[id] = $(id).checked));
+    return { values, checks, res: resolutions(), tab: currentTab };
 }
+function apply(st) {
+    if (!st || !st.values) return false;
+    PERSIST.forEach((id) => { if (st.values[id] !== undefined) $(id).value = st.values[id]; });
+    PERSIST_CHECK.forEach((id) => { if (st.checks && st.checks[id] !== undefined) $(id).checked = st.checks[id]; });
+    if (st.res) document.querySelectorAll(".res").forEach((c) => (c.checked = st.res.includes(+c.value)));
+    return true;
+}
+let saveTimer = null;
 function save() {
-    PERSIST.forEach((id) => localStorage.setItem(KEY + id, $(id).value));
-    PERSIST_CHECK.forEach((id) => localStorage.setItem(KEY + id, $(id).checked ? "1" : "0"));
-    localStorage.setItem(KEY + "res", resolutions().join(","));
+    const st = collect();
+    try { localStorage.setItem(KEY + "state", JSON.stringify(st)); } catch (e) { /* storage may be blocked */ }
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => post("/api/settings", st).catch(() => {}), 500);
 }
+async function load() {
+    let st = null;
+    try { st = await api("/api/settings"); } catch (e) { /* server unreachable: fall back */ }
+    if (!st || !st.values) {
+        try { st = JSON.parse(localStorage.getItem(KEY + "state") || "null"); } catch (e) { st = null; }
+    }
+    if (!st) { // migrate the pre-server-settings localStorage layout
+        st = { values: {}, checks: {}, res: null };
+        PERSIST.forEach((id) => { const v = localStorage.getItem(KEY + id); if (v !== null) st.values[id] = v; });
+        PERSIST_CHECK.forEach((id) => { const v = localStorage.getItem(KEY + id); if (v !== null) st.checks[id] = v === "1"; });
+        const r = localStorage.getItem(KEY + "res");
+        if (r) st.res = r.split(",").map(Number);
+    }
+    apply(st);
+    return st;
+}
+function bindAutosave() {
+    [...PERSIST, ...PERSIST_CHECK].forEach((id) => { $(id).addEventListener("input", save); $(id).addEventListener("change", save); });
+    document.querySelectorAll(".res").forEach((c) => c.addEventListener("change", save));
+}
+let currentTab = "dataset";
 const resolutions = () => [...document.querySelectorAll(".res")].filter((c) => c.checked).map((c) => +c.value);
 
 /* ---------- tabs ---------- */
 function showTab(t) {
+    currentTab = t;
+    if (typeof saveTimer !== "undefined") save();
     document.querySelectorAll(".tab-content").forEach((s) => (s.style.display = s.id === "tab-" + t ? "" : "none"));
     document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.tab === t));
-    if (t === "train") loadOutputs();
+    if (t === "train") { loadOutputs(); fetchLoss(true); }
 }
 document.querySelectorAll(".nav-item").forEach((n) => (n.onclick = () => showTab(n.dataset.tab)));
 
@@ -135,6 +169,85 @@ async function loadOutputs() {
     $("samples").innerHTML = r.samples.map((s) => `<img src="/api/image?path=${encodeURIComponent(s.path)}" title="${s.name}">`).join("");
 }
 
+/* ---------- loss curve ---------- */
+let L = { steps: [], loss: [], lr: [] };
+const lossCv = $("loss-canvas");
+
+function movavg(a, w) {
+    if (w <= 1) return a.slice();
+    const out = new Array(a.length); let sum = 0;
+    for (let i = 0; i < a.length; i++) { sum += a[i]; if (i >= w) sum -= a[i - w]; out[i] = sum / Math.min(i + 1, w); }
+    return out;
+}
+
+function drawLoss(hover) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = lossCv.clientWidth, H = lossCv.clientHeight;
+    if (!W) return;
+    lossCv.width = W * dpr; lossCv.height = H * dpr;
+    const g = lossCv.getContext("2d"); g.scale(dpr, dpr);
+    g.clearRect(0, 0, W, H);
+    const css = getComputedStyle(document.documentElement);
+    const mL = 56, mR = $("loss-lr").checked ? 56 : 12, mT = 10, mB = 24, pw = W - mL - mR, ph = H - mT - mB;
+    g.font = "11px sans-serif"; g.fillStyle = "#94a3b8"; g.strokeStyle = "rgba(255,255,255,0.08)";
+    const n = L.steps.length;
+    if (!n) { g.fillText("データなし / no data (loss_log.db)", mL + 10, mT + 20); return; }
+    const x0 = L.steps[0], x1 = Math.max(L.steps[n - 1], x0 + 1);
+    const sm = movavg(L.loss, +$("loss-win").value);
+    const sorted = L.loss.slice().sort((a, b) => a - b);
+    const ymax = sorted[Math.floor(sorted.length * 0.99)] * 1.1 || 1, ymin = 0;
+    const X = (s) => mL + ((s - x0) / (x1 - x0)) * pw, Y = (v) => mT + ph - ((Math.min(v, ymax) - ymin) / (ymax - ymin)) * ph;
+    for (let i = 0; i <= 4; i++) {
+        const v = ymin + ((ymax - ymin) * i) / 4, y = Y(v);
+        g.beginPath(); g.moveTo(mL, y); g.lineTo(mL + pw, y); g.stroke();
+        g.textAlign = "right"; g.fillText(v.toExponential(1), mL - 6, y + 4);
+    }
+    g.textAlign = "center";
+    for (let i = 0; i <= 5; i++) { const s = Math.round(x0 + ((x1 - x0) * i) / 5); g.fillText(s, X(s), H - 6); }
+    // raw loss
+    g.strokeStyle = "rgba(251,146,60,0.28)"; g.lineWidth = 1; g.beginPath();
+    L.loss.forEach((v, i) => (i ? g.lineTo(X(L.steps[i]), Y(v)) : g.moveTo(X(L.steps[i]), Y(v)))); g.stroke();
+    // smoothed loss
+    g.strokeStyle = "#fb923c"; g.lineWidth = 2; g.beginPath();
+    sm.forEach((v, i) => (i ? g.lineTo(X(L.steps[i]), Y(v)) : g.moveTo(X(L.steps[i]), Y(v)))); g.stroke();
+    // lr (right axis)
+    if ($("loss-lr").checked) {
+        const lrs = L.lr.map((v) => (v == null ? 0 : v)), lmax = Math.max(...lrs, 1e-12) * 1.1;
+        g.strokeStyle = "#60a5fa"; g.lineWidth = 1.5; g.beginPath();
+        lrs.forEach((v, i) => { const y = mT + ph - (v / lmax) * ph; i ? g.lineTo(X(L.steps[i]), y) : g.moveTo(X(L.steps[i]), y); });
+        g.stroke(); g.fillStyle = "#60a5fa"; g.textAlign = "left";
+        for (let i = 0; i <= 4; i++) g.fillText(((lmax * i) / 4).toExponential(1), mL + pw + 6, mT + ph - (ph * i) / 4 + 4);
+    }
+    if (hover != null) {
+        const i = Math.max(0, Math.min(n - 1, Math.round(((hover - mL) / pw) * (n - 1))));
+        g.strokeStyle = "rgba(255,255,255,0.4)"; g.beginPath(); g.moveTo(X(L.steps[i]), mT); g.lineTo(X(L.steps[i]), mT + ph); g.stroke();
+        $("loss-tip").textContent = `step ${L.steps[i]}  loss ${L.loss[i].toExponential(3)}  avg ${sm[i].toExponential(3)}` +
+            (L.lr[i] != null ? `  lr ${L.lr[i].toExponential(2)}` : "");
+    } else $("loss-tip").textContent = "";
+    const last = L.loss.slice(-Math.min(50, n)), first = L.loss.slice(0, Math.min(50, n));
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    $("loss-info").textContent = `${n} steps | 最初の50平均 ${mean(first).toExponential(2)} → 直近50平均 ${mean(last).toExponential(2)} | min ${sorted[0].toExponential(2)}`;
+}
+lossCv.addEventListener("mousemove", (e) => drawLoss(e.clientX - lossCv.getBoundingClientRect().left));
+lossCv.addEventListener("mouseleave", () => drawLoss(null));
+$("loss-win").onchange = $("loss-lr").onchange = () => drawLoss(null);
+window.addEventListener("resize", () => drawLoss(null));
+
+async function fetchLoss(full) {
+    const o = $("output-dir").value.trim(), n = $("name").value.trim();
+    if (!o || !n) return;
+    const since = full || !L.steps.length ? -1 : L.steps[L.steps.length - 1];
+    let r;
+    try { r = await api(`/api/loss?output_dir=${encodeURIComponent(o)}&name=${encodeURIComponent(n)}&since=${since}`); } catch (e) { return; }
+    if (!r.exists) { L = { steps: [], loss: [], lr: [] }; drawLoss(null); return; }
+    if (since >= 0 && r.last_step >= 0 && r.last_step < since) return fetchLoss(true); // run was restarted / pruned
+    if (since < 0) L = { steps: r.steps, loss: r.loss, lr: r.lr };
+    else if (r.steps.length) { L.steps.push(...r.steps); L.loss.push(...r.loss); L.lr.push(...r.lr); }
+    drawLoss(null);
+}
+const reloadLoss = () => fetchLoss(true);
+setInterval(() => { if (lastStatus === "running" && $("tab-train").style.display !== "none") fetchLoss(false); }, 3000);
+
 /* ---------- websocket ---------- */
 const fmt = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
     return (h ? h + "h " : "") + m + "m " + (s % 60) + "s"; };
@@ -173,8 +286,9 @@ function applyStatus(s) {
     if (s.status === "running" && s.step > 0 && s.phase === "training") {
         $("st-eta").textContent = fmt(((s.total - s.step) / s.step) * Math.max(1, s.elapsed));
     } else if (s.status !== "running") $("st-eta").textContent = "-";
+    if (lastStatus !== "running" && s.status === "running" && s.kind === "train") { L = { steps: [], loss: [], lr: [] }; drawLoss(null); }
     if (lastStatus === "running" && s.status !== "running") {
-        loadOutputs();
+        loadOutputs(); fetchLoss(true);
         if (s.kind === "caption" && s.status === "finished") loadDataset(false);
         if (s.message && s.status === "failed") $("start-msg").textContent = s.message;
         refreshEnv();
@@ -197,8 +311,13 @@ function connect() {
     const ping = setInterval(() => { if (ws.readyState === 1) ws.send("ping"); else clearInterval(ping); }, 15000);
 }
 
-load();
-refreshEnv();
-setInterval(refreshEnv, 30000);
-connect();
-if ($("dataset-path").value) loadDataset(false);
+(async () => {
+    const st = await load();
+    bindAutosave();
+    updateEpochHint();
+    refreshEnv();
+    setInterval(refreshEnv, 30000);
+    connect();
+    if ($("dataset-path").value) loadDataset(false);
+    if (st && st.tab && st.tab !== "dataset") showTab(st.tab);
+})();
