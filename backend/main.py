@@ -355,6 +355,10 @@ class TrainingConfig(BaseModel):
     sample_enabled: bool = False
     sample_every: int = 250
     sample_size: int = 768
+    sample_width: int = 0
+    sample_height: int = 0
+    sample_seed: int = 42
+    sample_strengths: str = ""
     sample_prompts: str = ""
     resume: bool = False
     comfy_loras_dir: str = ""
@@ -389,6 +393,15 @@ def validate_training(c: TrainingConfig):
         return "Missing model files: " + ", ".join(missing) + ". Run download_models.bat."
     if not env["hf_config"]:
         return "Model config files are missing. Run download_models.bat."
+    try:
+        strengths = aitk_config.parse_strengths(c.sample_strengths)
+    except ValueError:
+        return "Sample strengths must be numbers separated by commas (e.g. 0, 0.5, 1)."
+    if len(strengths) > 5 or any(m < 0 or m > 2 for m in strengths):
+        return "Use at most 5 sample strengths, each between 0 and 2."
+    for d in (c.sample_width, c.sample_height):
+        if d and (d % 32 or d < 256 or d > 2048):
+            return "Sample width/height must be multiples of 32 between 256 and 2048."
     out_dir = os.path.join(c.output_dir, c.name)
     if os.path.isdir(out_dir) and any(f.endswith(".safetensors") for f in os.listdir(out_dir)) and not c.resume:
         return (f"'{out_dir}' already has checkpoints and ai-toolkit would resume from them. "
@@ -498,10 +511,68 @@ async def list_outputs(output_dir: str, name: str):
                 ckpts.append({"name": f, "path": p, "mb": round(os.path.getsize(p) / 1048576, 1)})
         sdir = os.path.join(base, "samples")
         if os.path.isdir(sdir):
-            for f in sorted(os.listdir(sdir), reverse=True):
-                if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS:
-                    samples.append({"name": f, "path": os.path.join(sdir, f)})
-    return {"checkpoints": ckpts, "samples": samples[:24]}
+            for f in os.listdir(sdir):
+                m = re.search(r"__(\d+)_(\d+)\.", f)
+                if m and os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS:
+                    samples.append({"name": f, "path": os.path.join(sdir, f),
+                                    "step": int(m.group(1)), "idx": int(m.group(2))})
+        samples.sort(key=lambda x: (x["step"], x["idx"]))
+    return {"checkpoints": ckpts, "samples": samples}
+
+
+# LoRA delta-weight norms per checkpoint (how far the LoRA has moved the base model). CPU only.
+_norm_cache: dict = {}
+
+
+def _lora_norm(path: str):
+    import torch
+    from safetensors import safe_open
+    key = (path, os.path.getmtime(path))
+    if key in _norm_cache:
+        return _norm_cache[key]
+    total, per = 0.0, []
+    with safe_open(path, "pt") as f:
+        names = list(f.keys())
+        for ka in (k for k in names if k.endswith(".lora_A.weight")):
+            base = ka[: -len(".lora_A.weight")]
+            kb = base + ".lora_B.weight"
+            if kb not in names:
+                continue
+            d = (f.get_tensor(kb).float() @ f.get_tensor(ka).float()).norm().item()
+            per.append(d)
+            total += d * d
+    res = {"total": total ** 0.5, "mean": (sum(per) / len(per)) if per else 0.0, "modules": len(per)}
+    _norm_cache[key] = res
+    return res
+
+
+@app.get("/api/lora-norms")
+async def lora_norms(output_dir: str, name: str):
+    base = os.path.join(output_dir, name)
+    if not os.path.isdir(base):
+        return {"points": []}
+    files = []
+    for f in os.listdir(base):
+        if not f.endswith(".safetensors"):
+            continue
+        m = re.search(r"_(\d{9})\.safetensors$", f)
+        files.append((int(m.group(1)) if m else None, f))
+    steps = [s for s, _ in files if s is not None]
+    final_step = (max(steps) if steps else 0) + 1
+    try:  # the un-numbered file is the final save: use the configured total steps
+        import yaml
+        with open(os.path.join(base, "config.yaml"), encoding="utf-8") as cf:
+            final_step = int(yaml.safe_load(cf)["config"]["process"][0]["train"]["steps"])
+    except Exception:
+        pass
+    pts = []
+    for step, f in sorted(files, key=lambda x: (x[0] is None, x[0] or 0)):
+        try:
+            r = await asyncio.get_running_loop().run_in_executor(None, _lora_norm, os.path.join(base, f))
+        except Exception:
+            continue
+        pts.append({"file": f, "step": step if step is not None else final_step, "final": step is None, **r})
+    return {"points": pts}
 
 
 # ---------------------------------------------------------------- API: saved settings

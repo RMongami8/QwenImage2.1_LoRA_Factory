@@ -124,10 +124,15 @@
         <div class="form-group checks">
             <label><input type="checkbox" id="sample-on"> 学習中にサンプル画像を生成 / Generate samples (未検証・VRAM増)</label>
         </div>
-        <div class="grid2">
+        <div class="grid3">
             <div class="form-group"><label>サンプル間隔 / Sample every</label><input type="number" id="sample-every" value="250"></div>
-            <div class="form-group"><label>サイズ / Size</label><select id="sample-size"><option>512</option><option selected>768</option><option>1024</option></select></div>
+            <div class="form-group"><label>幅 / Width (32の倍数)</label><input type="number" id="sample-w" value="768" step="32" min="256" max="2048"></div>
+            <div class="form-group"><label>高さ / Height (32の倍数)</label><input type="number" id="sample-h" value="768" step="32" min="256" max="2048"></div>
+            <div class="form-group"><label>固定 seed / Seed</label><input type="number" id="sample-seed" value="42"></div>
+            <div class="form-group" style="grid-column: span 2"><label>LoRA強さ比較 / Strengths (カンマ区切り, 空欄=1.0のみ)</label>
+                <input type="text" id="sample-strengths" placeholder="0, 0.5, 1  (0 = LoRAなし)"></div>
         </div>
+        <p class="small">毎回同じseedで生成するので、チェックポイント間・強さ間を公平に比較できます。強さ比較は1回あたりの生成枚数(=プロンプト数×強さの数)が増えます。縦長学習なら 576×1024 や 736×1312 など。</p>
         <div class="form-group"><label>サンプルプロンプト(1行1件) / Prompts</label><textarea id="sample-prompts" rows="3"></textarea></div>
         <div class="form-group checks">
             <label><input type="checkbox" id="resume"> 既存チェックポイントから再開 / Resume if output exists</label>
@@ -163,7 +168,7 @@
             <label class="small checks" style="margin:0 0 0 1rem"><input type="checkbox" id="loss-lr" checked> lr</label>
             <button class="btn btn-secondary" style="margin-left:.75rem;padding:.4rem .8rem" onclick="reloadLoss()">🔄</button>
         </div>
-        <div style="position:relative"><canvas id="loss-canvas" style="width:100%;height:260px"></canvas>
+        <div style="position:relative"><canvas id="loss-canvas" style="display:block;width:100%;height:260px"></canvas>
             <div id="loss-tip" class="small" style="position:absolute;top:4px;left:60px;pointer-events:none"></div></div>
         <p class="small" id="loss-info">-</p>
         <p class="small">loss は1ステップごとの値で、タイムステップの乱数により大きくばらつきます(正常)。過学習の判断はサンプル画像を併用してください。</p>
@@ -171,7 +176,12 @@
     <div class="card"><h3 style="margin-bottom:.5rem;font-size:.9rem">ログ / Log</h3><div id="log" class="logbox"></div></div>
     <div class="card"><div class="row" style="margin-bottom:.5rem"><h3 style="font-size:.9rem;flex:1">出力 / Outputs</h3>
         <button class="btn btn-secondary" onclick="loadOutputs()">🔄</button></div>
-        <div id="outputs" class="small">-</div><div id="samples" class="thumbs" style="margin-top:.75rem"></div></div>
+        <div id="outputs" class="small">-</div>
+        <h3 style="font-size:.85rem;margin:1rem 0 .3rem">LoRA 重みの大きさ / LoRA weight norm</h3>
+        <canvas id="norm-canvas" style="display:block;width:100%;height:200px"></canvas>
+        <p class="small" id="norm-info">チェックポイントごとの ‖ΔW‖(全モジュール合計)。頭打ち=収束、直線的に増加=まだベースから離れ続けている。</p>
+        <h3 style="font-size:.85rem;margin:1rem 0 .3rem">サンプル画像 / Samples</h3>
+        <div id="samples"></div></div>
 </section>
 </main>
 <script src="app.js?v=1"></script>

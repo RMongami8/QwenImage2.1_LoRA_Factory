@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const KEY = "qwen21_factory_";
 const PERSIST = ["dataset-path", "gemma-path", "trigger-word", "name", "output-dir", "models-dir", "comfy-dir",
     "vram", "steps", "save-every", "rank", "alpha", "lr", "optimizer", "batch", "repeats", "dropout", "keep",
-    "opt-args", "sample-every", "sample-size", "sample-prompts", "cap-overwrite", "loss-win"];
+    "opt-args", "sample-every", "sample-w", "sample-h", "sample-seed", "sample-strengths", "sample-prompts", "cap-overwrite", "loss-win"];
 const PERSIST_CHECK = ["sample-on", "resume", "shutdown", "loss-lr"];
 
 /* Settings live in settings.json on the server (survives port changes / browser data wipes);
@@ -149,7 +149,8 @@ async function startTraining() {
         alpha: +$("alpha").value, optimizer_type: $("optimizer").value, optimizer_args: $("opt-args").value,
         caption_dropout: +$("dropout").value, trigger_word: $("trigger-word").value,
         sample_enabled: $("sample-on").checked, sample_every: +$("sample-every").value,
-        sample_size: +$("sample-size").value, sample_prompts: $("sample-prompts").value,
+        sample_size: 768, sample_width: +$("sample-w").value, sample_height: +$("sample-h").value,
+        sample_seed: +$("sample-seed").value, sample_strengths: $("sample-strengths").value, sample_prompts: $("sample-prompts").value,
         resume: $("resume").checked, comfy_loras_dir: $("comfy-dir").value.trim(), shutdown: $("shutdown").checked,
     };
     const r = await post("/api/start-training", body);
@@ -163,10 +164,61 @@ async function stopJob() {
 async function loadOutputs() {
     const o = $("output-dir").value.trim(), n = $("name").value.trim();
     if (!o || !n) return;
-    const r = await api(`/api/outputs?output_dir=${encodeURIComponent(o)}&name=${encodeURIComponent(n)}`);
+    const q = `output_dir=${encodeURIComponent(o)}&name=${encodeURIComponent(n)}`;
+    const r = await api(`/api/outputs?${q}`);
     $("outputs").innerHTML = r.checkpoints.length
-        ? r.checkpoints.map((c) => `${c.name} (${c.mb} MB)`).join("<br>") + `<br><code>${o}\\${n}</code>` : "-";
-    $("samples").innerHTML = r.samples.map((s) => `<img src="/api/image?path=${encodeURIComponent(s.path)}" title="${s.name}">`).join("");
+        ? r.checkpoints.map((c) => `${c.name} (${c.mb} MB)`).join("<br>") + `<br><code>${o}\${n}</code>` : "-";
+    renderSamples(r.samples);
+    try { drawNorms((await api(`/api/lora-norms?${q}`)).points); } catch (e) { drawNorms([]); }
+}
+
+function renderSamples(samples) {
+    const host = $("samples");
+    if (!samples.length) { host.innerHTML = '<p class="small">-</p>'; return; }
+    let strengths = [];
+    try { strengths = $("sample-strengths").value.split(/[,;]/).map((t) => t.trim()).filter(Boolean); } catch (e) { /* ignore */ }
+    const per = Math.max(1, strengths.length); // images per prompt: columns are strengths
+    const byStep = {};
+    samples.forEach((s) => (byStep[s.step] = byStep[s.step] || []).push(s));
+    host.innerHTML = Object.keys(byStep).map(Number).sort((a, b) => b - a).map((step) => {
+        const imgs = byStep[step].map((s) => {
+            const label = strengths.length ? `m=${strengths[s.idx % per] ?? "?"}` : `#${s.idx}`;
+            return `<figure style="margin:0"><img src="/api/image?path=${encodeURIComponent(s.path)}" loading="lazy" title="${s.name}">` +
+                `<figcaption class="small" style="text-align:center">${label}</figcaption></figure>`;
+        }).join("");
+        return `<div style="margin-bottom:1rem"><div class="small" style="margin-bottom:.3rem"><b>step ${step}</b></div>` +
+            `<div class="thumbs" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))">${imgs}</div></div>`;
+    }).join("");
+}
+
+function drawNorms(pts) {
+    const cv = $("norm-canvas"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    if (!W) return;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+    g.font = "11px sans-serif"; g.fillStyle = "#94a3b8";
+    if (!pts.length) { g.fillText("データなし / no checkpoints", 60, 30); return; }
+    const mL = 56, mR = 16, mT = 14, mB = 26, pw = W - mL - mR, ph = H - mT - mB;
+    const x0 = Math.min(0, pts[0].step), x1 = Math.max(...pts.map((p) => p.step), 1);
+    const ymax = Math.max(...pts.map((p) => p.total)) * 1.15 || 1;
+    const X = (v) => mL + ((v - x0) / (x1 - x0)) * pw, Y = (v) => mT + ph - (v / ymax) * ph;
+    g.strokeStyle = "rgba(255,255,255,0.08)"; g.textAlign = "right";
+    for (let i = 0; i <= 4; i++) { const v = (ymax * i) / 4, y = Y(v); g.beginPath(); g.moveTo(mL, y); g.lineTo(mL + pw, y); g.stroke(); g.fillText(v.toFixed(1), mL - 6, y + 4); }
+    g.strokeStyle = "#2dd4bf"; g.lineWidth = 2; g.beginPath();
+    const all = [{ step: 0, total: 0 }, ...pts];
+    all.forEach((p, i) => (i ? g.lineTo(X(p.step), Y(p.total)) : g.moveTo(X(p.step), Y(p.total)))); g.stroke();
+    g.textAlign = "center";
+    pts.forEach((p) => {
+        g.fillStyle = "#2dd4bf"; g.beginPath(); g.arc(X(p.step), Y(p.total), 3.5, 0, 6.3); g.fill();
+        g.fillStyle = "#94a3b8"; g.fillText(p.final ? `${p.step} (final)` : p.step, X(p.step), H - 8);
+        g.fillText(p.total.toFixed(1), X(p.step), Y(p.total) - 8);
+    });
+    if (pts.length >= 2) {
+        const a = pts[pts.length - 2], b = pts[pts.length - 1];
+        const growth = ((b.total - a.total) / Math.max(a.total, 1e-9)) * 100;
+        $("norm-info").textContent = `最新の伸び: ${a.step}→${b.step} step で ${growth >= 0 ? "+" : ""}${growth.toFixed(0)}% ` +
+            `(直線的に増え続けているなら、まだベースから離れ続けています / 頭打ちなら収束)`;
+    }
 }
 
 /* ---------- loss curve ---------- */

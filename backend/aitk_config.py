@@ -45,6 +45,16 @@ def parse_params(text: str) -> dict:
     return out
 
 
+def parse_strengths(text: str) -> list:
+    """'0, 0.5, 1' -> [0.0, 0.5, 1.0] (empty -> [])."""
+    out = []
+    for tok in (text or "").replace(";", ",").split(","):
+        tok = tok.strip()
+        if tok:
+            out.append(float(tok))
+    return out
+
+
 def build_config(c: dict) -> dict:
     """c: validated settings dict from the API (see TrainingConfig in main.py)."""
     preset = VRAM_PRESETS.get(c["vram"], VRAM_PRESETS["low"])
@@ -88,6 +98,14 @@ def build_config(c: dict) -> dict:
     trigger = c.get("trigger_word", "").strip()
     if trigger:
         prompts = [p if trigger in p else f"{trigger}, {p}" for p in prompts]
+    # Strength comparison: every prompt is rendered once per LoRA strength (--m) with the same seed,
+    # so a row of images differs only by LoRA strength. Order: prompt-major, strength-minor.
+    seed = int(c.get("sample_seed", 42))
+    strengths = parse_strengths(c.get("sample_strengths", ""))
+    if strengths:
+        prompts = [f"{p} --m {m:g} --seed {seed}" for p in prompts for m in strengths]
+    else:
+        prompts = [f"{p} --seed {seed}" for p in prompts]
 
     process = {
         "type": "sd_trainer",
@@ -113,12 +131,12 @@ def build_config(c: dict) -> dict:
         "sample": {
             "sampler": "flowmatch",
             "sample_every": c["sample_every"],
-            "width": c["sample_size"],
-            "height": c["sample_size"],
+            "width": c.get("sample_width") or c["sample_size"],
+            "height": c.get("sample_height") or c["sample_size"],
             "prompts": prompts,
             "neg": "",
-            "seed": 42,
-            "walk_seed": True,
+            "seed": seed,
+            "walk_seed": False,  # same seed at every sampling step, so checkpoints are comparable
             "guidance_scale": 4,
             "sample_steps": 25,
         },
